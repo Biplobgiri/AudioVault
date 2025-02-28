@@ -1,0 +1,9 @@
+#CONFIGURATIONS
+DELTA = 0.001
+DWT_LEVEL = 4
+WAVELET = "db4"
+SEED_LEFT = 122
+SEED_RIGHT = 222
+TWO_BIT_QIM = True
+SYNC_BITS=["1","0","1","0","1","0","1","0","1","0","1","0","1","0","1","0"]
+FRAME_SIZE = 2000000
