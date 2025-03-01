@@ -242,6 +242,7 @@ def embed_data(secret_data, files, audio_path, stego_path):
     reconstructed_stereo = np.column_stack((stego_audio_left[:min_len], stego_audio_right[:min_len]))
 
     sf.write(stego_path, reconstructed_stereo, sr)
+    return frames_count
 
 
 

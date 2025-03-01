@@ -70,7 +70,7 @@ async def embed_secret(audio: UploadFile = File(...), image: UploadFile = File(.
 
     start_time = time.time()
     try:
-        embed_data(secret_data=secret_data, files=files, audio_path=audio_filename, stego_path=stego_audio_filename)
+        frames_count = embed_data(secret_data=secret_data, files=files, audio_path=audio_filename, stego_path=stego_audio_filename)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error embedding secret: {str(e)}")
     elapsed_time = time.time() - start_time
@@ -78,6 +78,7 @@ async def embed_secret(audio: UploadFile = File(...), image: UploadFile = File(.
     return JSONResponse(content={
         "message": "Secret data embedded successfully!",
         "stego_audio_file": stego_audio_filename.name,
+        "frames_count":frames_count,
         "elapsed_time": elapsed_time
     })
 
