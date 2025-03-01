@@ -48,13 +48,21 @@ def apply_dwt(audio_path, wavelet, dwt_level, payload_size):
     audio_right /= max_val
 
     # Determine frame size
-    frame_size = FRAME_SIZE
+    frame_size = int((payload_size//2 + 8 + 16) *1.08) #Extra (11*2) bits to hold frame size and 8 bits for sync bits and 20 bits are padding
+    print(f"Frame Size: {frame_size}")
 
-    # Split into frames
+    # Split into frames including the remaining portion
     num_frames = len(audio_left) // frame_size
     frames_left = [audio_left[i * frame_size: (i + 1) * frame_size] for i in range(num_frames)]
     frames_right = [audio_right[i * frame_size: (i + 1) * frame_size] for i in range(num_frames)]
 
+    # Include the remaining portion (if any)
+    remaining_left = audio_left[num_frames * frame_size:]
+    remaining_right = audio_right[num_frames * frame_size:]
+
+    if len(remaining_left) > 0:
+        frames_left.append(remaining_left)
+        frames_right.append(remaining_right)
 
     print(f"TOTAL FRAMES: {len(frames_left)}")
     # Apply DWT independently to each frame
@@ -63,16 +71,16 @@ def apply_dwt(audio_path, wavelet, dwt_level, payload_size):
 
     frames_sync_values_left=[]
     for frame in frames_left:
-        frames_sync_values_left.append(frame[:8])
-        dwt_coeffs_left.append(pywt.wavedec(frame[8:], wavelet, level=dwt_level, mode="periodization"))
+        frames_sync_values_left.append(frame[:24])
+        dwt_coeffs_left.append(pywt.wavedec(frame[24:], wavelet, level=dwt_level, mode="periodization"))
 
 
     frames_sync_values_right=[]
     for frame in frames_right:
-        frames_sync_values_right.append(frame[:8])
-        dwt_coeffs_right.append(pywt.wavedec(frame[8:], wavelet, level=dwt_level, mode="periodization"))
+        frames_sync_values_right.append(frame[:24])
+        dwt_coeffs_right.append(pywt.wavedec(frame[24:], wavelet, level=dwt_level, mode="periodization"))
 
-    return dwt_coeffs_left, dwt_coeffs_right, frames_sync_values_left, frames_sync_values_right,sr
+    return dwt_coeffs_left, dwt_coeffs_right, frames_sync_values_left, frames_sync_values_right,frame_size,sr
 
 def insert_sync_bits(sync_frame, sync_bits):
     sync_bits = group_bits(sync_bits)
@@ -80,6 +88,13 @@ def insert_sync_bits(sync_frame, sync_bits):
         sync_frame[i] = modify_coefficent(sync_val,sync_bits[i],delta=DELTA, two_bit_qim=TWO_BIT_QIM)
     
     return sync_frame
+
+def to_bit_list(number, bit_length=32):
+    binary_string = bin(number)[2:]
+    padded_binary = binary_string.zfill(bit_length)
+    bit_list = list(padded_binary)
+    
+    return bit_list
 
 def split_data(payload_array, payload_distribution):
     start_index = 0
@@ -129,10 +144,14 @@ def embed_data(secret_data, files, audio_path, stego_path):
         secret_data = group_bits(secret_data)
         header_bits = group_bits(header_bits)
 
-    frames_dwt_coeffs_left, frames_dwt_coeffs_right,frames_sync_values_left,frames_sync_values_right, sr = apply_dwt(audio_path=audio_path, wavelet=WAVELET, dwt_level=DWT_LEVEL,payload_size=len(secret_data) + len(header_bits))
+    frames_dwt_coeffs_left, frames_dwt_coeffs_right,frames_sync_values_left,frames_sync_values_right, frame_size,sr = apply_dwt(audio_path=audio_path, wavelet=WAVELET, dwt_level=DWT_LEVEL,payload_size=len(secret_data) + len(header_bits))
 
     modified_frames_dwt_coeffs_left = []
     modified_frames_dwt_coeffs_right = []
+
+    #Count in how many frames data has been embedded
+    frames_count = 0
+    invalid_frame_index = -1
 
     for frame_left, frame_right in zip(frames_dwt_coeffs_left, frames_dwt_coeffs_right):
         dwt_coeffs_left = frame_left
@@ -146,7 +165,9 @@ def embed_data(secret_data, files, audio_path, stego_path):
 
         print(f"Payload Capacity: {possible_locations} and Payload Length: {payload_length}")
         if payload_length > possible_locations:
-            raise ValueError(f"Payload length ({payload_length}) exceeds available valid embedding locations ({possible_locations}).")
+            print(f"Payload length ({payload_length}) exceeds available valid embedding locations ({possible_locations}) in the current frame {frames_count+1}.")
+            invalid_frame_index = frames_count
+            break
 
         # Inject the header directly into first-level detail coefficients
         for i, value in enumerate(header_bits):
@@ -190,19 +211,26 @@ def embed_data(secret_data, files, audio_path, stego_path):
 
         modified_frames_dwt_coeffs_left.append([dwt_coeffs_left[0]] + detail_coeffs_left)
         modified_frames_dwt_coeffs_right.append([dwt_coeffs_right[0]] + detail_coeffs_right)
+        frames_count += 1
 
-        # Reconstruct each frame separately
-        reconstructed_frames_left = reconstruct_frames(modified_frames_dwt_coeffs_left, WAVELET)
-        reconstructed_frames_right = reconstruct_frames(modified_frames_dwt_coeffs_right, WAVELET)
+    if invalid_frame_index != -1:
+        modified_frames_dwt_coeffs_left.append(frames_dwt_coeffs_left[invalid_frame_index])
+        modified_frames_dwt_coeffs_right.append(frames_dwt_coeffs_right[invalid_frame_index])
 
-        # Now concatenate the frames in the time domain
-        stego_audio_left = np.concatenate(reconstructed_frames_left)
-        stego_audio_right = np.concatenate(reconstructed_frames_right)
+    # Reconstruct each frame separately
+    reconstructed_frames_left = reconstruct_frames(modified_frames_dwt_coeffs_left, WAVELET)
+    reconstructed_frames_right = reconstruct_frames(modified_frames_dwt_coeffs_right, WAVELET)
+ 
+    stego_audio_left = np.concatenate(reconstructed_frames_left)
+    stego_audio_right = np.concatenate(reconstructed_frames_right)
 
-        frame_size = FRAME_SIZE
-
+    if frames_count == 0:
+        raise ValueError(f"Payload length ({payload_length}) couldn't be embedded in any frame")
+    
     for i,sync_portion in enumerate(frames_sync_values_left):
-        sync_portion = insert_sync_bits(sync_frame=sync_portion, sync_bits=SYNC_BITS)
+        sync_bits_with_fs= np.concatenate([SYNC_BITS, to_bit_list(frame_size)])
+        print(sync_bits_with_fs)
+        sync_portion = insert_sync_bits(sync_frame=sync_portion, sync_bits=sync_bits_with_fs)
         stego_audio_left = insert_array_at_index(stego_audio_left, sync_portion, i*frame_size)
         stego_audio_right = insert_array_at_index(stego_audio_right,frames_sync_values_right[i], i*frame_size)
         

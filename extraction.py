@@ -56,20 +56,28 @@ def get_synced_start(audio_path, wavelet, dwt_level):
 
     if end_i == 0:
         raise ValueError("Sync bits not found in the audio.")
+    
+    frame_size_bits = []
+    for _,coeff in enumerate(audio_left[end_i:end_i + 16]):
+        frame_size_bits.append(extract_secret_value(coeff, two_bit_qim=TWO_BIT_QIM, delta=DELTA))
+        
+    binary_string = ''.join(frame_size_bits)
+    frame_size = int(binary_string, 2)
 
-    frame_end = end_i + FRAME_SIZE - len(sync_bits)
+    print(f"Frame Size Extracted as: {frame_size}")
+
+    frame_end = end_i + frame_size - len(sync_bits)
     
     if frame_end > len(audio_left):
         raise ValueError("Frame size exceeds audio length after sync detection.")
-
-    dwt_coeffs_left = pywt.wavedec(audio_left[end_i:frame_end], wavelet, level=dwt_level, mode="periodization")
-    dwt_coeffs_right = pywt.wavedec(audio_right[end_i:frame_end], wavelet, level=dwt_level, mode="periodization")
+    dwt_coeffs_left = pywt.wavedec(audio_left[(end_i + 16):frame_end], wavelet, level=dwt_level, mode="periodization")
+    dwt_coeffs_right = pywt.wavedec(audio_right[(end_i + 16):frame_end], wavelet, level=dwt_level, mode="periodization")
 
     return dwt_coeffs_left, dwt_coeffs_right
 
 #MAIN EXTRACTION FLOW
 def extract_data(audio_path,extracted_data_path):
-    stego_dwt_coeffs_left, stego_dwt_coeffs_right=get_synced_start(audio_path="stego.wav",wavelet=WAVELET,dwt_level=DWT_LEVEL)
+    stego_dwt_coeffs_left, stego_dwt_coeffs_right=get_synced_start(audio_path=audio_path,wavelet=WAVELET,dwt_level=DWT_LEVEL)
 
     stego_detail_coeffs_left = stego_dwt_coeffs_left[1:] #Gives an array of array of different level of detail coeffs
     stego_detail_coeffs_right = stego_dwt_coeffs_right[1:]
@@ -136,10 +144,10 @@ def extract_data(audio_path,extracted_data_path):
     ]
 
     extracted_data = extracted_data_right + extracted_data_left
-    print(f"Extracted Data Length:{len(extracted_data)}")
     if(TWO_BIT_QIM):
         extracted_data = [bit for pair in extracted_data for bit in pair] #Ungroup the bits
     
+    print(f"Extracted Data Length:{len(extracted_data)}")
     img_metadata = header["files"][0]
     extracted_image = bits_to_image(extracted_data, (img_metadata["height"],img_metadata["width"],img_metadata["channels"]))
     img = Image.fromarray(extracted_image)
